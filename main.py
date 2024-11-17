@@ -1,4 +1,4 @@
-#импорт библиотек // import libraries
+#импорт библиотек // Import libraries
 import requests
 import json
 import os
@@ -11,28 +11,36 @@ from dotenv import load_dotenv
 load_dotenv()
 bot=telebot.TeleBot(os.getenv("TOKEN"))
 
-#Прочтение файла с героями // #Reading file with heroes
+#Загрузка файлов с дополнительной информацией // Download files with additional information
 with open('heroes.json', 'r') as heroes:
   heroid = json.load(heroes)
 
+with open('countries.json', 'r') as countries:
+  country = json.load(countries)
 
-#Обработка команды /start // processing /start command
+with open('dota2_ranks.json', 'r') as dota2_ranks:
+  rank = json.load(dota2_ranks)
+
+#Обработка команды /start // Processing /start command
 @bot.message_handler(commands=['start'])
-def get_match_id(message):
-  bot.send_message(message.chat.id, 'Привет. Этот бот создан на базе OpenDota API\nОзнакомиться с командами: /help')
+def start_message(message):
+  bot.send_message(message.chat.id, 'Привет. OpenDotaBot - бот с открытым исходным кодом, основанный на базе API от <a href="https://www.opendota.com/">OpenDota</a>\nОзнакомиться с командами: /help',\
+                    parse_mode='HTML', disable_web_page_preview=True) #Использование HTML для форматирования сообщения и убирание предпросмотра ссылки // Using HTML to format a message and removing the link preview
 
 
-#Обработка команды /help // processing /help command
+#Обработка команды /help // Processing /help command
 @bot.message_handler(commands=['help'])
-def get_match_id(message):
-  bot.send_message(message.chat.id, '/findmatch - узнать информацию о матче по его ID')
+def help_message(message):
+  bot.send_message(message.chat.id, '''/findmatch - Узнать информацию о матче по его ID
+/findplayer - Информация о игроке по его ID
+/findaccount - Информация о игроке по его ID''')
 
 
-#Обработка команды /findmatch // processing /findmatch command
+#Обработка команды /findmatch // Processing /findmatch command
 @bot.message_handler(commands=['findmatch'])
 def get_match_id(message):
   match_id = bot.send_message(message.chat.id, 'Введите id матча')
-  bot.register_next_step_handler(match_id, get_match_data) #Берёт информацию с сообщения пользователя // Taking information from user`s message
+  bot.register_next_step_handler(match_id, get_match_data) #Ожидает ответа пользователя с информацией // Waits for user response with information
 
 def get_match_data(message):
   match_id = int(message.text) #Обозначение инфомации пользователя в переменную // Designating user information into a variable 
@@ -113,10 +121,67 @@ def get_match_data(message):
 ''')
       
     os.remove(f'{match_id}.json') #Удаление ранее полученного json-файла // Deleting a previously received json file
+
   except:
     pass
+
+
+#Обработка команд /findplayer и /findaccount // Handling the /findplayer and /findaccount commands
+@bot.message_handler(commands=['findplayer', 'findaccount'])
+def get_account_id(message):
+  account_id = bot.send_message(message.chat.id, 'Введите id игрока')
+  bot.register_next_step_handler(account_id, get_account_data) #Ожидает ответа пользователя с информацией // Waits for user response with information
+
+def get_account_data(message):
+  account_id = int(message.text) #Обозначение инфомации пользователя в переменную // Designating user information into a variable 
+  try:
+    resp = requests.get(f'https://api.opendota.com/api/players/{account_id}') #Отправка запроса на opendota.com API // Sending a request to the opendota.com API
+    response = resp.json()
+
+    with open(f'{account_id}.json', 'w') as outfile:
+      json.dump(response, outfile) #Сохранение полученного json-файла // Saving received json-file
+
+    with open(f'{account_id}.json', 'r') as outfile:
+      result = json.load(outfile) #Чтение полученного json-файла // Reading received json-file
+
+    
+    #Обработка и сохранение информации о игроке в переменные // Processing and storing information about the player into variables
+    data_account_id = result['profile']['account_id']
+    data_steamid = result['profile']['steamid']
+    data_personaname = result['profile']['personaname']
+    data_avatarfull = result['profile']['avatarfull']
+    #Присваеваем значение None, т.к заполнять будем далее // We assign the value None, because we will fill it in later
+    data_country = None
+    data_country_emoji = None
+    data_player_rank = None
+
+
+    for elem in country["countries"]: #Считываем элементы в с json файла "countries" // Reading elements from the json file "countries"
+      if result["profile"]["loccountrycode"] == elem["country_iso_alpha2"]: #Сравниваем код страны, полученный запросом на API с нашим списком // Compare the country code received by the API request with our list
+        data_country = elem.get("country") #Если код страны совпадает, то назначиваем название страны в переменную // If the country code matches, then assign the country name to the variable
+      else:
+        pass
   
+    for elem in rank["ranks"]: #Делаем то же самое, но теперь для получения ранга // We do the same thing, but now to gain rank
+      if str(result["rank_tier"]) == elem["rank_id"]:
+        data_player_rank = elem.get("rank_name")
+      else:
+        pass
+
+
+    #Бот отправляет сообщение с результатом // The bot sends a message with the result
+    if data_country == None: #Если страна в стиме отсутствует, то не добавляем её в ответ // If the country is not on Steam, then we do not add it to the answer.
+      bot.send_photo(message.chat.id, data_avatarfull, caption=f'''ID аккаунта: {data_account_id}\nSteam ID: {data_steamid}\nНикнейм: {data_personaname}
+Ранг: {data_player_rank}''')
+    else:
+      bot.send_photo(message.chat.id, data_avatarfull, caption=f'''ID аккаунта: {data_account_id}\nSteam ID: {data_steamid}\nНикнейм: {data_personaname}
+Страна: {data_country}
+Ранг: {data_player_rank}''')
+
+    os.remove(f'{account_id}.json') #Удаление ранее полученного json-файла // Deleting a previously received json file
+
+  except:
+    pass
 
 
 bot.infinity_polling()
-
