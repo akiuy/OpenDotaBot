@@ -31,8 +31,8 @@ class Form(StatesGroup):
   account_id = State()
 
 #Загрузка файлов с дополнительной информацией // Download files with additional information
-with open('heroes.json', 'r') as heroes:
-  heroid = json.load(heroes)
+with open('heroes.json', 'r') as heroes_json:
+  heroes = json.load(heroes_json)
 
 with open('countries.json', 'r') as countries:
   country = json.load(countries)
@@ -85,24 +85,33 @@ async def get_match_data(message, state: FSMContext):
 
 
     #Обработка информации о игроках, сохранение в списки в виде словарей // Processing information about players, saving to lists in the form of dictionaries
-    for elem in result["players"]:
-      if elem.get("team_number") == 0: #Если игрок находится на стороне сил света // If the player is on the radiant side
+    for elem_result in result["players"]:
+      if elem_result.get("team_number") == 0: #Если игрок находится на стороне сил света // If the player is on the radiant side
         players_info = dict()
-        players_info['hero'] = heroid[str(elem.get('hero_id'))]
-        players_info['kills'] = elem.get("kills", None)
-        players_info['deaths'] = elem.get("deaths", None)
-        players_info['assists'] = elem.get("assists", None)
+        for elem_heroes in heroes["heroes"]:
+          if str(elem_result.get("hero_id")) == elem_heroes["hero_id"]:
+            players_info['hero'] = elem_heroes.get("hero_name")
+          else:
+            pass
+        players_info['kills'] = elem_result.get("kills")
+        players_info['deaths'] = elem_result.get("deaths")
+        players_info['assists'] = elem_result.get("assists")
         data_players_radiant.append(players_info)
-      elif elem.get("team_number") == 1: #Если игрок находится на стороне сил тьмы // If the player is on the dire side
+      elif elem_result.get("team_number") == 1: #Если игрок находится на стороне сил тьмы // If the player is on the dire side
         players_info = dict()
-        players_info['hero'] = heroid[str(elem.get('hero_id'))]
-        players_info['kills'] = elem.get("kills", None)
-        players_info['deaths'] = elem.get("deaths", None)
-        players_info['assists'] = elem.get("assists", None)
+        for elem_heroes in heroes["heroes"]:
+          if str(elem_result.get("hero_id")) == elem_heroes["hero_id"]:
+            players_info['hero'] = elem_heroes.get("hero_name")
+          else:
+            pass
+        players_info['kills'] = elem_result.get("kills")
+        players_info['deaths'] = elem_result.get("deaths")
+        players_info['assists'] = elem_result.get("assists")
         data_players_dire.append(players_info)
       else:
         pass
 
+    
 
     #Отправка ботом сообщения с информацией о матче // Bot sending a message with information about a match
     if data_win: #Победа сил света // Radiant match-win 
