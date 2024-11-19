@@ -2,14 +2,33 @@
 import requests
 import json
 import os
-import telebot
 import datetime
+import asyncio
+import logging
+import sys
+from aiogram import Bot, Dispatcher, F, Router, html
+from aiogram.client.default import DefaultBotProperties
+from aiogram.enums import ParseMode
+from aiogram.filters import Command, CommandStart
+from aiogram.fsm.context import FSMContext
+from aiogram.fsm.state import State, StatesGroup
+from aiogram.types import (
+    KeyboardButton,
+    Message,
+    ReplyKeyboardMarkup,
+    ReplyKeyboardRemove,
+)
 from dotenv import load_dotenv
 
 
 #Получение токена с .env файла // Getting token from .env file
 load_dotenv()
-bot=telebot.TeleBot(os.getenv("TOKEN"))
+TOKEN = os.getenv("TOKEN")
+router = Router()
+
+class Form(StatesGroup):
+  match_id = State()
+  account_id = State()
 
 #Загрузка файлов с дополнительной информацией // Download files with additional information
 with open('heroes.json', 'r') as heroes:
@@ -22,36 +41,37 @@ with open('dota2_ranks.json', 'r') as dota2_ranks:
   rank = json.load(dota2_ranks)
 
 #Обработка команды /start // Processing /start command
-@bot.message_handler(commands=['start'])
-def start_message(message):
-  bot.send_message(message.chat.id, 'Привет. OpenDotaBot - бот с открытым исходным кодом, основанный на базе API от <a href="https://www.opendota.com/">OpenDota</a>\nОзнакомиться с командами: /help',\
+@router.message(CommandStart())
+async def command_start_handler(message: Message) -> None:
+  await message.answer('Привет. OpenDotaBot - бот с открытым исходным кодом, основанный на базе API от <a href="https://www.opendota.com/">OpenDota</a>\nОзнакомиться с командами: /help',\
                     parse_mode='HTML', disable_web_page_preview=True) #Использование HTML для форматирования сообщения и убирание предпросмотра ссылки // Using HTML to format a message and removing the link preview
 
 
 #Обработка команды /help // Processing /help command
-@bot.message_handler(commands=['help'])
-def help_message(message):
-  bot.send_message(message.chat.id, '''/findmatch - Узнать информацию о матче по его ID
+@router.message(Command('help'))
+async def command_help_handler(message: Message) -> None:
+  await message.answer('''/findmatch - Узнать информацию о матче по его ID
 /findplayer - Информация о игроке по его ID
-/findaccount - Информация о игроке по его ID''')
+''')
 
 
 #Обработка команды /findmatch // Processing /findmatch command
-@bot.message_handler(commands=['findmatch'])
-def get_match_id(message):
-  match_id = bot.send_message(message.chat.id, 'Введите id матча')
-  bot.register_next_step_handler(match_id, get_match_data) #Ожидает ответа пользователя с информацией // Waits for user response with information
+@router.message(Command('findmatch'))
+async def command_findmatch_handler(message, state: FSMContext):
+  await state.set_state(Form.match_id)
+  await message.answer("Введите ID матча")
 
-def get_match_data(message):
-  match_id = int(message.text) #Обозначение инфомации пользователя в переменную // Designating user information into a variable 
+@router.message(Form.match_id)
+async def get_match_data(message, state: FSMContext):
+  await state.update_data(match_id=message.text)
   try:
-    resp = requests.get(f'https://api.opendota.com/api/matches/{match_id}') # Отправка запроса на сервер opendota.com // Sending a request to the opendota.com server
+    resp = requests.get(f'https://api.opendota.com/api/matches/{message.text}') # Отправка запроса на сервер opendota.com // Sending a request to the opendota.com server
     response = resp.json() # Получение ответа в виде json-файла // Collecting info in json-file format
 
-    with open(f'{match_id}.json', 'w') as outfile:
+    with open(f'{message.text}.json', 'w') as outfile:
       json.dump(response, outfile) #Сохранение полученного json-файла // Saving received json-file
 
-    with open(f'{match_id}.json', 'r') as outfile:
+    with open(f'{message.text}.json', 'r') as outfile:
       result = json.load(outfile) #Чтение полученного json-файла // Reading received json-file
 
     #Обработка и сохранение результатов матча в переменные // Processing and saving match results into variables
@@ -86,7 +106,7 @@ def get_match_data(message):
 
     #Отправка ботом сообщения с информацией о матче // Bot sending a message with information about a match
     if data_win: #Победа сил света // Radiant match-win 
-      bot.send_message(message.chat.id, f'''🏆Силы света [{data_radiant_score}:{data_dire_score}] Силы тьмы 
+      await message.answer(f'''🏆Силы света [{data_radiant_score}:{data_dire_score}] Силы тьмы 
 Длительность: {data_duration}\n
 🏆Силы света:\n
 {data_players_radiant[0].get('hero')} - [{data_players_radiant[0].get('kills')}/{data_players_radiant[0].get('deaths')}/{data_players_radiant[0].get('assists')}]
@@ -104,7 +124,7 @@ def get_match_data(message):
 ''')
       
     else: ##Победа сил тьмы // Dire match-win 
-      bot.send_message(message.chat.id, f'''Силы света [{data_radiant_score}:{data_dire_score}] Силы тьмы🏆
+      await message.answer(f'''Силы света [{data_radiant_score}:{data_dire_score}] Силы тьмы🏆
 Длительность: {data_duration}
 Силы света:\n
 {data_players_radiant[0].get('hero')} - [{data_players_radiant[0].get('kills')}/{data_players_radiant[0].get('deaths')}/{data_players_radiant[0].get('assists')}]
@@ -120,28 +140,29 @@ def get_match_data(message):
 {data_players_dire[4].get('hero')} - [{data_players_dire[4].get('kills')}/{data_players_dire[4].get('deaths')}/{data_players_dire[4].get('assists')}]
 ''')
       
-    os.remove(f'{match_id}.json') #Удаление ранее полученного json-файла // Deleting a previously received json file
+    os.remove(f'{message.text}.json') #Удаление ранее полученного json-файла // Deleting a previously received json file
 
   except:
     pass
 
 
 #Обработка команд /findplayer и /findaccount // Handling the /findplayer and /findaccount commands
-@bot.message_handler(commands=['findplayer', 'findaccount'])
-def get_account_id(message):
-  account_id = bot.send_message(message.chat.id, 'Введите id игрока')
-  bot.register_next_step_handler(account_id, get_account_data) #Ожидает ответа пользователя с информацией // Waits for user response with information
+@router.message(Command('findplayer'))
+async def command_findplayer_handler(message, state: FSMContext):
+  await state.set_state(Form.account_id)
+  await message.answer('Введите ID игрока')
 
-def get_account_data(message):
-  account_id = int(message.text) #Обозначение инфомации пользователя в переменную // Designating user information into a variable 
+@router.message(Form.account_id)
+async def get_account_data(message, state: FSMContext):
+  await state.update_data(account_id=message.text)
   try:
-    resp = requests.get(f'https://api.opendota.com/api/players/{account_id}') #Отправка запроса на opendota.com API // Sending a request to the opendota.com API
+    resp = requests.get(f'https://api.opendota.com/api/players/{message.text}') #Отправка запроса на opendota.com API // Sending a request to the opendota.com API
     response = resp.json()
 
-    with open(f'{account_id}.json', 'w') as outfile:
+    with open(f'{message.text}.json', 'w') as outfile:
       json.dump(response, outfile) #Сохранение полученного json-файла // Saving received json-file
 
-    with open(f'{account_id}.json', 'r') as outfile:
+    with open(f'{message.text}.json', 'r') as outfile:
       result = json.load(outfile) #Чтение полученного json-файла // Reading received json-file
 
     
@@ -171,17 +192,31 @@ def get_account_data(message):
 
     #Бот отправляет сообщение с результатом // The bot sends a message with the result
     if data_country == None: #Если страна в стиме отсутствует, то не добавляем её в ответ // If the country is not on Steam, then we do not add it to the answer.
-      bot.send_photo(message.chat.id, data_avatarfull, caption=f'''ID аккаунта: {data_account_id}\nSteam ID: {data_steamid}\nНикнейм: {data_personaname}
+      await message.answer_photo(data_avatarfull, caption=f'''ID аккаунта: {data_account_id}\nSteam ID: {data_steamid}\nНикнейм: {data_personaname}
 Ранг: {data_player_rank}''')
     else:
-      bot.send_photo(message.chat.id, data_avatarfull, caption=f'''ID аккаунта: {data_account_id}\nSteam ID: {data_steamid}\nНикнейм: {data_personaname}
+      await message.answer_photo(data_avatarfull, caption=f'''ID аккаунта: {data_account_id}\nSteam ID: {data_steamid}\nНикнейм: {data_personaname}
 Страна: {data_country}
 Ранг: {data_player_rank}''')
 
-    os.remove(f'{account_id}.json') #Удаление ранее полученного json-файла // Deleting a previously received json file
+    os.remove(f'{message.text}.json') #Удаление ранее полученного json-файла // Deleting a previously received json file
 
   except:
     pass
 
 
-bot.infinity_polling()
+async def main():
+    # Initialize Bot instance with default bot properties which will be passed to all API calls
+    bot = Bot(token=TOKEN, default=DefaultBotProperties(parse_mode=ParseMode.HTML))
+
+    dp = Dispatcher()
+
+    dp.include_router(router)
+
+    # Start event dispatching
+    await dp.start_polling(bot)
+
+
+if __name__ == "__main__":
+    logging.basicConfig(level=logging.INFO, stream=sys.stdout)
+    asyncio.run(main())
