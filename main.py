@@ -1,4 +1,6 @@
 #импорт библиотек // Import libraries
+from asyncio.windows_events import NULL
+from typing import Any
 import requests
 import json
 import os
@@ -6,19 +8,31 @@ import datetime
 import asyncio
 import logging
 import sys
+import sqlite3
+import create_db
+import resource.general
+import resource.cs2
+import resource.dota2
+from keyboards import *
 from aiogram import Bot, Dispatcher, F, Router, html
 from aiogram.client.default import DefaultBotProperties
 from aiogram.enums import ParseMode
 from aiogram.filters import Command, CommandStart
 from aiogram.fsm.context import FSMContext
 from aiogram.fsm.state import State, StatesGroup
+from aiogram.utils.keyboard import InlineKeyboardBuilder, ReplyKeyboardBuilder
 from aiogram.types import (
     KeyboardButton,
     Message,
     ReplyKeyboardMarkup,
     ReplyKeyboardRemove,
+    InlineKeyboardMarkup,
+    InlineKeyboardButton,
+    WebAppInfo,
+    CallbackQuery
 )
 from dotenv import load_dotenv
+
 
 
 #Получение токена с .env файла // Getting token from .env file
@@ -26,25 +40,58 @@ load_dotenv()
 TOKEN = os.getenv("TOKEN")
 router = Router()
 
+
 class Form(StatesGroup):
   match_id = State()
   account_id = State()
 
 #Загрузка файлов с дополнительной информацией // Download files with additional information
 with open('heroes.json', 'r') as heroes_json:
-  heroes = json.load(heroes_json)
+    heroes = json.load(heroes_json)
 
-with open('countries.json', 'r') as countries:
-  country = json.load(countries)
+with open('countries.json', 'r') as countries_json:
+    country = json.load(countries_json)
 
-with open('dota2_ranks.json', 'r') as dota2_ranks:
-  rank = json.load(dota2_ranks)
+with open('dota2_ranks.json', 'r') as dota2_ranks_json:
+    rank = json.load(dota2_ranks_json)
+
+with open('resource\\general\\tournaments.json', 'r') as tournaments_json:
+    tournaments = json.load(tournaments_json)
+
+
+
 
 #Обработка команды /start // Processing /start command
 @router.message(CommandStart())
 async def command_start_handler(message: Message) -> None:
-  await message.answer('Привет. OpenDotaBot - бот с открытым исходным кодом, основанный на базе API от <a href="https://www.opendota.com/">OpenDota</a>\nОзнакомиться с командами: /help',\
-                    parse_mode='HTML', disable_web_page_preview=True) #Использование HTML для форматирования сообщения и убирание предпросмотра ссылки // Using HTML to format a message and removing the link preview
+    
+    await message.answer("""🇺🇸English
+Hello, OpenDotaBot is a bot created for conveniently tracking matches in Dota, as well as viewing statistics of other players.
+Let's set up the bot!
+\n
+🇷🇺Russian
+Привет, OpenDotaBot - бот, созданный для удобного отслеживания матчей в доте, а так же просмотр статистики других игроков.
+Давайте настроим бота!""",
+parse_mode='HTML', disable_web_page_preview=True)
+
+    connection = sqlite3.connect('users.db')
+    cursor = connection.cursor()
+
+    cursor.execute('''
+CREATE TABLE IF NOT EXISTS users (
+id INTEGER PRIMARY KEY,
+tid INTEGER,
+predictions_count INTEGER,
+predictions_score INTEGER,
+UNIQUE ("tid") ON CONFLICT IGNORE
+)
+''')
+
+
+    cursor.execute('INSERT INTO users (tid, predictions_count, predictions_score) VALUES (?, ?, ?)', (message.from_user.id, 0, 0))
+
+    connection.commit()
+    connection.close()
 
 
 #Обработка команды /help // Processing /help command
@@ -208,14 +255,251 @@ async def get_account_data(message, state: FSMContext):
 Страна: {data_country}
 Ранг: {data_player_rank}''')
 
+
+
     os.remove(f'{message.text}.json') #Удаление ранее полученного json-файла // Deleting a previously received json file
 
   except:
     pass
 
+@router.message(Command('predict'))
+async def tournament_list(message):
+    kb = []
+
+    connection = sqlite3.connect('predictions.db')
+    cursor = connection.cursor()
+
+    cursor.execute('SELECT * FROM tournaments')
+    tournament_info = cursor.fetchall()
+
+    connection.commit()
+    connection.close()
+
+    for tournament in tournament_info:
+        if tournament[2] == "Live" or tournament[2] == "Upcoming":
+            kb.append([InlineKeyboardButton(text=f"{tournament[1]}", callback_data=f"trn.predict_{tournament[1].replace(' ', '_')}")])
+        else:
+            pass
+    keyboard = InlineKeyboardMarkup(inline_keyboard=kb)
+    if kb != []:
+        await message.answer("Список турниров, на которые можно поставить прогнозы:", reply_markup=keyboard)
+    else:
+        await message.answer("Нет доступных турниров")
+
+
+@router.message(Command('closematch'))
+async def tournament_list(message):
+    kb = []
+
+    connection = sqlite3.connect('predictions.db')
+    cursor = connection.cursor()
+
+    cursor.execute('SELECT * FROM tournaments')
+    tournament_info = cursor.fetchall()
+
+    connection.commit()
+    connection.close()
+
+    for tournament in tournament_info:
+        if tournament[2] == "Live" or tournament[2] == "Upcoming":
+            kb.append([InlineKeyboardButton(text=f"{tournament[1]}", callback_data=f"trn.close_{tournament[1].replace(' ', '_')}")])
+        else:
+            pass
+    keyboard = InlineKeyboardMarkup(inline_keyboard=kb)
+    if kb != []:
+        await message.answer("Список турниров, матчи которых можно закрыть:", reply_markup=keyboard)
+    else:
+        await message.answer("Нет доступных турниров")
+
+
+@router.callback_query()
+async def matches_list(callback: CallbackQuery):
+    kb = []
+    match_info = {}
+
+    connection = sqlite3.connect('predictions.db')
+    cursor = connection.cursor()
+
+    cursor.execute('SELECT * FROM tournaments')
+    tournament_info = cursor.fetchall()
+    cursor.execute('SELECT * FROM matches')
+    matches_info = cursor.fetchall()
+    cursor.execute('SELECT * FROM predicts')
+    predicts_info = cursor.fetchall()
+    print(predicts_info)
+
+    connection.commit()
+    connection.close()
+
+
+    if callback.data.startswith('trn.predict'):
+        for matches in matches_info:
+            if callback.data.replace('_', ' ') == f'trn.predict_{matches[1]}'.replace('_', ' '):
+                if matches[6] == "Upcoming":
+                    if (callback.from_user.id, matches[0], 0) in predicts_info or (callback.from_user.id, matches[0], 1) in predicts_info:
+                        pass
+                    else:
+                        kb.append([InlineKeyboardButton(text=f"{matches[2]}"+ " - "+f"{matches[3]}", callback_data=f"match.predict_{matches[0]}")])
+                else:
+                    pass
+            else:
+                pass
+        else:
+            pass
+
+        keyboard = InlineKeyboardMarkup(inline_keyboard=kb)
+        if kb != []:
+            await callback.message.edit_text('Хорошо, сейчас доступны следующие матчи для прогнозов:', reply_markup=keyboard)
+        else:
+            await callback.message.edit_text('Нет доступных матчей')
+
+
+    elif callback.data.startswith('match.predict'):
+        for matches in matches_info:
+            if callback.data == f"match_{matches[0]}":
+                kb.append([InlineKeyboardButton(text=f"{matches[2]}", callback_data=f"pred_{matches[0]}_a")])
+                kb.append([InlineKeyboardButton(text=f"{matches[3]}", callback_data=f"pred_{matches[0]}_b")])
+                match_info['tournament_name'] = matches[1]
+                match_info['team_a'] = matches[2]
+                match_info['team_b'] = matches[3]
+                match_info['time'] = matches[4]
+                match_info['type'] = matches[5]
+                    
+            else:
+                pass
+        keyboard = InlineKeyboardMarkup(inline_keyboard=kb)
+        await callback.message.edit_text(f'Информация о матче:\nТурнир: {match_info['tournament_name']}\n{match_info['team_a']} - {match_info['team_b']}\nВремя проведения: {match_info['time']}\nТип матча: {match_info['type']}',
+                                         reply_markup=keyboard)
+
+
+    elif callback.data.startswith('pred'):
+        for matches in matches_info:
+            if callback.data == f"pred_{matches[0]}_a":
+                kb.append([InlineKeyboardButton(text="Подтвердить", callback_data=f"cpred_{matches[0]}_a_yes")])
+                kb.append([InlineKeyboardButton(text="Отменить", callback_data=f"cpred_{matches[0]}_a_no")])
+                match_info['tournament_name'] = matches[1]
+                match_info['team_a'] = matches[2]
+                match_info['team_b'] = matches[3]
+                match_info['time'] = matches[4]
+                match_info['type'] = matches[5]
+                keyboard = InlineKeyboardMarkup(inline_keyboard=kb)
+                await callback.message.edit_text(f'Вы уверены, что хотите сделать прогноз на победу команды {match_info['team_a']}?\nЭто действие будет невозможно отменить',
+                                                     reply_markup=keyboard)
+            elif callback.data == f"pred_{matches[0]}_b":
+                kb.append([InlineKeyboardButton(text="Подтвердить", callback_data=f"cpred_{matches[0]}_b_yes")])
+                kb.append([InlineKeyboardButton(text="Отменить", callback_data=f"cpred_{matches[0]}_b_no")])
+                match_info['tournament_name'] = matches[1]
+                match_info['team_a'] = matches[2]
+                match_info['team_b'] = matches[3]
+                match_info['time'] = matches[4]
+                match_info['type'] = matches[5]
+                keyboard = InlineKeyboardMarkup(inline_keyboard=kb)
+                await callback.message.edit_text(f'Вы уверены, что хотите сделать прогноз на победу команды {match_info['team_b']}?\nЭто действие будет невозможно отменить',
+                                                 reply_markup=keyboard)
+            else:
+                pass
+            
+                    
+    elif callback.data.startswith('cpred'):
+        for matches in matches_info:
+            if callback.data == f"cpred_{matches[0]}_a_yes":
+                match_info['tournament_name'] = matches[1]
+                match_info['team_a'] = 0
+                match_info['match_id'] = matches[0]
+                connection = sqlite3.connect('predictions.db')
+                cursor = connection.cursor()
+
+                cursor.execute('INSERT INTO predicts (tid, match_id, predict) VALUES (?, ?, ?)', (callback.from_user.id, match_info['match_id'], match_info['team_a']))
+
+                connection.commit()
+                connection.close()
+                await callback.answer('Прогноз успешно записан!')
+                await callback.message.delete()
+
+            elif callback.data == f"cpred_{matches[0]}_b_yes":
+                match_info['tournament_name'] = matches[1]
+                match_info['team_b'] = 1
+                match_info['match_id'] = matches[0]
+                connection = sqlite3.connect('predictions.db')
+                cursor = connection.cursor()
+
+                cursor.execute('INSERT INTO predicts (tid, match_id, predict) VALUES (?, ?, ?)', (callback.from_user.id, match_info['match_id'], match_info['team_b']))
+
+                connection.commit()
+                connection.close()
+                await callback.answer('Прогноз успешно записан!')
+                await callback.message.delete()
+
+            elif callback.data == f"cpred_{matches[0]}_a_no":
+                await callback.answer('Действие отменено.')
+                await callback.message.delete()
+
+            elif callback.data == f"cpred_{matches[0]}_b_no":
+                await callback.answer('Действие отменено.')
+                await callback.message.delete()
+
+    elif callback.data.startswith('trn.close'):
+        for matches in matches_info:
+            if callback.data.replace('_', ' ') == f'trn.close_{matches[1]}'.replace('_', ' '):
+                if matches[6] == "Upcoming" or matches[6] == "Live":
+                    kb.append([InlineKeyboardButton(text=f"{matches[2]}"+ " - "+f"{matches[3]}", callback_data=f"match.close_{matches[0]}")])
+                else:
+                    pass
+            else:
+                pass
+        else:
+            pass
+
+        keyboard = InlineKeyboardMarkup(inline_keyboard=kb)
+        if kb != []:
+            await callback.message.edit_text('Доступные для закрытия матчи:', reply_markup=keyboard)
+        else:
+            await callback.message.edit_text('Нет доступных матчей для закрытия')
+
+
+    elif callback.data.startswith('match.close'):
+        for matches in matches_info:
+            if callback.data == f"match.close_{matches[0]}":
+                kb.append([InlineKeyboardButton(text=f"{matches[2]}", callback_data=f"match.win_{matches[0]}_a")])
+                kb.append([InlineKeyboardButton(text=f"{matches[3]}", callback_data=f"match.win_{matches[0]}_b")])
+                match_info['tournament_name'] = matches[1]
+                match_info['team_a'] = matches[2]
+                match_info['team_b'] = matches[3]
+                match_info['time'] = matches[4]
+                match_info['type'] = matches[5]
+                    
+            else:
+                pass
+        keyboard = InlineKeyboardMarkup(inline_keyboard=kb)
+        await callback.message.edit_text('Укажите победителя матча', reply_markup=keyboard)
+    
+    elif callback.data.startswith('match.win'):
+        for matches in matches_info:
+            if callback.data == f"match.win_{matches[0]}_a":
+                connection = sqlite3.connect('predictions.db')
+                cursor = connection.cursor()
+
+                cursor.execute('INSERT INTO matches (team_a_win, team_b_win) VALUES (?, ?)', (1, 0))
+
+                connection.commit()
+                connection.close()
+
+            elif callback.data == f"match.win_{matches[0]}_b":
+                connection = sqlite3.connect('predictions.db')
+                cursor = connection.cursor()
+
+                cursor.execute('INSERT INTO matches (team_a_win, team_b_win) VALUES (?, ?)', (0, 1))
+                cursor.execute(f'UPDATE matches SET match_status = "Finished" WHERE match_id == {matches[0]}')
+
+                connection.commit()
+                connection.close()
+
+            await callback.answer('Матч закрыт')
+            
+
+
 
 async def main():
-    # Initialize Bot instance with default bot properties which will be passed to all API calls
     bot = Bot(token=TOKEN, default=DefaultBotProperties(parse_mode=ParseMode.HTML))
 
     dp = Dispatcher()
